@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"encoding/json"
-	"io"
-	"log"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"event-receiver/kafka"
 	"event-receiver/models"
+
+	"github.com/google/uuid"
 )
 
 type APIHandler struct {
@@ -21,45 +23,66 @@ func NewAPIHandler(kp *kafka.Producer) *APIHandler {
 }
 
 func (h *APIHandler) PostEvent(w http.ResponseWriter, r *http.Request) {
-	eventType := r.Header.Get("Event-Type")
-	if len(eventType) == 0 {
+	sourceName := r.PathValue("source_name")
+	if len(sourceName) == 0 {
 		sendJSONResponse(w, 400, models.APIResponse{
-			Status:  "Fail",
-			Message: "EventType header required",
+			Status:  "Wrong request",
+			Message: "url must match pattern /sources/{source_name}/events",
 		})
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		sendJSONResponse(w, 400, models.APIResponse{
-			Status:  "Wrong request",
-			Message: "Body required",
-		})
-		return
-	}
-	request := models.EventCreateMessage{
-		EventType: eventType,
-		Event:     json.RawMessage{},
-	}
-	err = request.Event.UnmarshalJSON(body)
-	if err != nil {
+	request := models.APIRequest{}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		sendJSONResponse(w, 400, models.APIResponse{
 			Status:  "Wrong request",
 			Message: "Can't parse JSON from body",
 		})
+		slog.Warn(
+			"Fail to parse request json",
+			slog.Any("error", err),
+		)
 		return
 	}
 
-	err = h.kafkaProducer.SendMessage("event", request)
-	if err != nil {
-		log.Printf("Fail to send message %s", err)
+	slog.Info(
+		"Receive event",
+		slog.String("source_name", sourceName),
+		slog.String("type", request.Type),
+		slog.String("id", request.Id),
+	)
+
+	message := models.EventCreateMessage{
+		Event: models.TargetEvent{
+			Id:     request.Id,
+			Source: sourceName,
+			Type:   request.Type,
+			Data:   request.Data,
+		},
+		IngestedAt: time.Now(),
+		TraceId:    uuid.NewString(),
+	}
+
+	if err := h.kafkaProducer.SendMessage("event", message); err != nil {
+		slog.Error(
+			"Fail to send message",
+			slog.Any("error", err),
+		)
 		sendJSONResponse(w, 500, models.APIResponse{
 			Status:  "Internal error",
 			Message: "Fail to handle event",
 		})
 		return
 	}
+
+	slog.Info(
+		"Event created",
+		slog.String("source_name", message.Event.Source),
+		slog.String("type", message.Event.Type),
+		slog.String("id", message.Event.Id),
+		slog.String("trace_id", message.TraceId),
+	)
 
 	sendJSONResponse(w, 200, models.APIResponse{
 		Status:  "OK",
@@ -78,5 +101,13 @@ func (h *APIHandler) HealthCheck(w http.ResponseWriter, r *http.Request) {
 func sendJSONResponse(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	err := json.NewEncoder(w).Encode(data)
+	if err != nil {
+		slog.Error(
+			"Fail to encode repsonse json",
+			slog.Int("status", status),
+			slog.Any("data", data),
+			slog.Any("error", err),
+		)
+	}
 }

@@ -2,7 +2,7 @@ package kafka
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 
 	"github.com/IBM/sarama"
 )
@@ -46,7 +46,11 @@ func (p *Producer) SendMessage(key string, value interface{}) error {
 		return err
 	}
 
-	log.Printf("Message sent to partition %d at offset %d\n", partition, offset)
+	slog.Info(
+		"Message sent to partition",
+		slog.Int("partition", int(partition)),
+		slog.Int64("offset", offset),
+	)
 	return nil
 }
 

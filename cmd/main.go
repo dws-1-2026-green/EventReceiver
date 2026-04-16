@@ -4,10 +4,8 @@ import (
 	"event-receiver/config"
 	"event-receiver/handlers"
 	"event-receiver/kafka"
-	"log"
+	"log/slog"
 	"net/http"
-
-	"github.com/gorilla/mux"
 )
 
 func main() {
@@ -15,39 +13,48 @@ func main() {
 
 	kafkaProducer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
 	if err != nil {
-		log.Fatalf("Failed to create Kafka producer: %v", err)
+		slog.Error(
+			"Failed to create Kafka producer",
+			slog.Any("error", err),
+		)
+		panic(err)
 	}
 
 	defer kafkaProducer.Close()
-	log.Println("Kafka producer initialized")
+	slog.Info("Kafka producer initialized")
 
 	apiHandler := handlers.NewAPIHandler(kafkaProducer)
 
-	router := mux.NewRouter()
+	mux := http.NewServeMux()
 
-	router.Use(loggingMiddleware)
-	router.Use(contentTypeMiddleware)
-	router.HandleFunc("/health", apiHandler.HealthCheck).Methods("GET")
-	router.HandleFunc("/api/event", apiHandler.PostEvent).Methods("POST")
+	mux.HandleFunc("GET /health", apiHandler.HealthCheck)
+	mux.HandleFunc("POST /sources/{source_name}/events", apiHandler.PostEvent)
+
+	handlerWithMiddleware := loggingMiddleware(mux)
 
 	addr := cfg.Ip + ":" + cfg.Port
-	log.Printf("Server starting on %s", addr)
-	if err := http.ListenAndServe(addr, router); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
+	slog.Info(
+		"Server starting",
+		slog.String("addres", addr),
+	)
+	if err := http.ListenAndServe(addr, handlerWithMiddleware); err != nil {
+		slog.Error(
+			"Server failed to start",
+			slog.Any("error", err),
+		)
+		panic(err)
 	}
 
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s %s", r.Method, r.URL.Path, r.RemoteAddr)
-		next.ServeHTTP(w, r)
-	})
-}
-
-func contentTypeMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		slog.Debug(
+			"Http request",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.String("remote_addr", r.RemoteAddr),
+		)
 		next.ServeHTTP(w, r)
 	})
 }
