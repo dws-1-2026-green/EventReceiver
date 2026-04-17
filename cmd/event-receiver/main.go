@@ -80,6 +80,14 @@ func createApiHandler(kafkaProducer *kafka.Producer) http.Handler {
 func main() {
 
 	cfg := environmentInitialization()
+	exitCode := make(chan int, 1)
+	defer func() {
+		select {
+		case code := <-exitCode:
+			os.Exit(code)
+		default:
+		}
+	}()
 
 	kafkaProducer, err := kafka.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
 	if err != nil {
@@ -87,7 +95,8 @@ func main() {
 			"Failed to create Kafka producer",
 			slog.Any("error", err),
 		)
-		os.Exit(1)
+		exitCode <- 1
+		return
 	}
 	defer kafkaShutdown(kafkaProducer)
 
@@ -118,10 +127,16 @@ func main() {
 	select {
 	case <-quit:
 		slog.Info("Shutting down server...")
+		exitCode <- 0
+		return
 	case err := <-shutdownSignal:
 		if err != nil {
 			slog.Error("Server error, initializing shutdown", slog.Any("error", err))
+			exitCode <- 1
+		} else {
+			exitCode <- 0
 		}
+		return
 	}
 }
 

@@ -1,3 +1,5 @@
 cmd.exe
 coverage.out
 .env
+event-receiver.exe
+event-receiver
