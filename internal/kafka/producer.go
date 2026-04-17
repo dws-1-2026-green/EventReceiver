@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 
@@ -54,6 +55,15 @@ func (p *Producer) SendMessage(key string, value interface{}) error {
 	return nil
 }
 
-func (p *Producer) Close() error {
-	return p.producer.Close()
+func (p *Producer) Close(ctx context.Context) error {
+	done := make(chan error, 1)
+	go func() {
+		done <- p.producer.Close()
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
