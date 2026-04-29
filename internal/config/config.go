@@ -9,6 +9,8 @@ type Config struct {
 	Port         string
 	KafkaBrokers []string
 	KafkaTopic   string
+	LogLevel     string
+	LogFormat    string
 }
 
 func Load() *Config {
@@ -17,6 +19,8 @@ func Load() *Config {
 		Port:         getEnv("PORT", "8080"),
 		KafkaBrokers: []string{getEnv("KAFKA_BROKERS", "localhost:9092")},
 		KafkaTopic:   getEnv("KAFKA_TOPIC", "routing.requests"),
+		LogLevel:     getEnv("LOG_LEVEL", "info"),
+		LogFormat:    getEnv("LOG_FORMAT", "text"),
 	}
 }
 

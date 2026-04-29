@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/bearsoft-fi/slogloki v0.0.2
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/eapache/go-resiliency v1.7.0 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
