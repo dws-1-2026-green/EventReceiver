@@ -6,15 +6,19 @@ import (
 	"event-receiver/internal/handlers"
 	"event-receiver/internal/kafka"
 	"event-receiver/internal/logger"
+	appmetrics "event-receiver/internal/metrics"
 	"log/slog"
 	"net/http"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"os"
 
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func environmentInitialization() *config.Config {
@@ -37,8 +41,42 @@ func createApiHandler(kafkaProducer *kafka.Producer) http.Handler {
 
 	mux.HandleFunc("GET /health", apiHandler.HealthCheck)
 	mux.HandleFunc("POST /sources/{source_name}/events", apiHandler.PostEvent)
+	mux.Handle("GET /metrics", promhttp.Handler())
 
-	return loggingMiddleware(mux)
+	return httpMetricsMiddleware(loggingMiddleware(mux))
+}
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *statusResponseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func normalizePath(path string) string {
+	if strings.HasPrefix(path, "/sources/") && strings.HasSuffix(path, "/events") {
+		return "/sources/{source_name}/events"
+	}
+	return path
+}
+
+func httpMetricsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		start := time.Now()
+		rw := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		duration := time.Since(start).Seconds()
+		path := normalizePath(r.URL.Path)
+		appmetrics.HTTPRequestsTotal.WithLabelValues(r.Method, path, strconv.Itoa(rw.statusCode)).Inc()
+		appmetrics.HTTPRequestDuration.WithLabelValues(r.Method, path).Observe(duration)
+	})
 }
 
 func main() {

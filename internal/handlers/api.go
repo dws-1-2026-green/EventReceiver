@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"event-receiver/internal/kafka"
+	"event-receiver/internal/metrics"
 	"event-receiver/internal/models"
 
 	"github.com/google/uuid"
@@ -46,6 +47,8 @@ func (h *APIHandler) PostEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	metrics.EventsReceived.WithLabelValues(sourceName, request.Type).Inc()
+
 	slog.Info(
 		"Receive event",
 		slog.String("source_name", sourceName),
@@ -65,6 +68,7 @@ func (h *APIHandler) PostEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.kafkaProducer.SendMessage("event", message); err != nil {
+		metrics.EventsPublished.WithLabelValues(sourceName, request.Type, "error").Inc()
 		slog.Error(
 			"Fail to send message",
 			slog.Any("error", err),
@@ -76,6 +80,7 @@ func (h *APIHandler) PostEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	metrics.EventsPublished.WithLabelValues(sourceName, request.Type, "success").Inc()
 	slog.Info(
 		"Event created",
 		slog.String("source_name", message.Event.Source),
