@@ -5,6 +5,7 @@ import (
 	"event-receiver/internal/config"
 	"event-receiver/internal/handlers"
 	"event-receiver/internal/kafka"
+	"event-receiver/internal/logger"
 	appmetrics "event-receiver/internal/metrics"
 	"log/slog"
 	"net/http"
@@ -20,53 +21,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func setupLogger() {
-	levelStr := os.Getenv("LOG_LEVEL")
-	if levelStr == "" {
-		levelStr = "info"
-	}
-
-	var level slog.Level
-	switch strings.ToLower(levelStr) {
-	case "debug":
-		level = slog.LevelDebug
-	case "info":
-		level = slog.LevelInfo
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
-
-	opts := &slog.HandlerOptions{
-		Level: level,
-	}
-
-	var handler slog.Handler
-	if os.Getenv("LOG_FORMAT") == "json" {
-		handler = slog.NewJSONHandler(os.Stdout, opts)
-	} else {
-		handler = slog.NewTextHandler(os.Stdout, opts)
-	}
-
-	slog.SetDefault(slog.New(handler))
-
-	slog.Info("Logger initialized",
-		slog.String("level", levelStr),
-		slog.String("format", os.Getenv("LOG_FORMAT")),
-	)
-}
-
 func environmentInitialization() *config.Config {
 	err := godotenv.Load()
-	setupLogger()
+	cfg := config.Load()
+
+	logger.SetupLogger(cfg)
+
 	if err != nil {
 		slog.Debug("No .env file found, using environment variables")
 	}
 
-	return config.Load()
+	return cfg
 }
 
 func createApiHandler(kafkaProducer *kafka.Producer) http.Handler {
