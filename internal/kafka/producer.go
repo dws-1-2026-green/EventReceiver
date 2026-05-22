@@ -3,33 +3,50 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"sync"
 
 	"github.com/IBM/sarama"
 )
 
+// ErrBufferFull is returned when the async producer's internal buffer is full,
+// meaning Kafka cannot keep up with the incoming rate.
+var ErrBufferFull = errors.New("kafka producer input buffer full")
+
 type Producer struct {
-	producer sarama.SyncProducer
+	producer sarama.AsyncProducer
 	topic    string
+	wg       sync.WaitGroup
 }
 
 func NewProducer(brokers []string, topic string) (*Producer, error) {
 	config := sarama.NewConfig()
-	config.Producer.RequiredAcks = sarama.WaitForAll
-	config.Producer.Retry.Max = 5
-	config.Producer.Return.Successes = true
+	config.Producer.RequiredAcks = sarama.WaitForLocal
+	config.Producer.Return.Successes = false
+	config.Producer.Return.Errors = true
+	config.ChannelBufferSize = 10000
 
-	producer, err := sarama.NewSyncProducer(brokers, config)
+	producer, err := sarama.NewAsyncProducer(brokers, config)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Producer{
-		producer: producer,
-		topic:    topic,
-	}, nil
+	p := &Producer{producer: producer, topic: topic}
+
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		for kerr := range producer.Errors() {
+			slog.Error("kafka async publish error", slog.Any("error", kerr.Err))
+		}
+	}()
+
+	return p, nil
 }
 
+// SendMessage enqueues a message for async delivery to Kafka.
+// Returns ErrBufferFull if the internal buffer is saturated.
 func (p *Producer) SendMessage(key string, value interface{}) error {
 	valueBytes, err := json.Marshal(value)
 	if err != nil {
@@ -42,27 +59,24 @@ func (p *Producer) SendMessage(key string, value interface{}) error {
 		Value: sarama.ByteEncoder(valueBytes),
 	}
 
-	partition, offset, err := p.producer.SendMessage(msg)
-	if err != nil {
-		return err
+	select {
+	case p.producer.Input() <- msg:
+		return nil
+	default:
+		return ErrBufferFull
 	}
-
-	slog.Info(
-		"Message sent to partition",
-		slog.Int("partition", int(partition)),
-		slog.Int64("offset", offset),
-	)
-	return nil
 }
 
 func (p *Producer) Close(ctx context.Context) error {
-	done := make(chan error, 1)
+	p.producer.AsyncClose()
+	done := make(chan struct{})
 	go func() {
-		done <- p.producer.Close()
+		p.wg.Wait()
+		close(done)
 	}()
 	select {
-	case err := <-done:
-		return err
+	case <-done:
+		return nil
 	case <-ctx.Done():
 		return ctx.Err()
 	}

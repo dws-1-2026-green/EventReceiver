@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -68,30 +69,38 @@ func (h *APIHandler) PostEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.kafkaProducer.SendMessage("event", message); err != nil {
-		metrics.EventsPublished.WithLabelValues(sourceName, request.Type, "error").Inc()
-		slog.Error(
-			"Fail to send message",
-			slog.Any("error", err),
-		)
-		sendJSONResponse(w, 500, models.APIResponse{
-			Status:  "Internal error",
-			Message: "Fail to handle event",
-		})
+		if errors.Is(err, kafka.ErrBufferFull) {
+			metrics.EventsPublished.WithLabelValues(sourceName, request.Type, "buffer_full").Inc()
+			slog.Warn("kafka buffer full, rejecting event",
+				slog.String("source_name", sourceName),
+				slog.String("type", request.Type),
+			)
+			sendJSONResponse(w, 503, models.APIResponse{
+				Status:  "Overloaded",
+				Message: "Service is overloaded, retry later",
+			})
+		} else {
+			metrics.EventsPublished.WithLabelValues(sourceName, request.Type, "error").Inc()
+			slog.Error("fail to send message", slog.Any("error", err))
+			sendJSONResponse(w, 500, models.APIResponse{
+				Status:  "Internal error",
+				Message: "Fail to handle event",
+			})
+		}
 		return
 	}
 
 	metrics.EventsPublished.WithLabelValues(sourceName, request.Type, "success").Inc()
-	slog.Info(
-		"Event created",
+	slog.Info("event accepted",
 		slog.String("source_name", message.Event.Source),
 		slog.String("type", message.Event.Type),
 		slog.String("id", message.Event.Id),
 		slog.String("trace_id", message.TraceId),
 	)
 
-	sendJSONResponse(w, 200, models.APIResponse{
+	sendJSONResponse(w, 202, models.APIResponse{
 		Status:  "OK",
-		Message: "Event sended",
+		Message: "Event accepted",
 	})
 }
 
